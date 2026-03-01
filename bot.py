@@ -1,88 +1,89 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-from dotenv import load_dotenv
+import wavelink
 import os
-import yt_dlp
-from database import add_song, clear_queue
-from player import MusicPlayer
+from dotenv import load_dotenv
 
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
+LAVALINK_HOST = os.getenv("LAVALINK_HOST", "lavalink")
+LAVALINK_PORT = int(os.getenv("LAVALINK_PORT", 2333))
+LAVALINK_PASSWORD = os.getenv("LAVALINK_PASSWORD", "youshallnotpass")
 
 intents = discord.Intents.default()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-player = MusicPlayer(bot)
-
-
-class ControlView(discord.ui.View):
-    def __init__(self, guild):
-        super().__init__(timeout=None)
-        self.guild = guild
-
-    @discord.ui.button(label="⏭ Skip", style=discord.ButtonStyle.primary)
-    async def skip(self, interaction: discord.Interaction, button):
-        vc = interaction.guild.voice_client
-        if vc and vc.is_playing():
-            vc.stop()
-            await interaction.response.send_message("Skipped.")
-        else:
-            await interaction.response.send_message("Nothing playing.")
-
-    @discord.ui.button(label="⏹ Stop", style=discord.ButtonStyle.danger)
-    async def stop(self, interaction: discord.Interaction, button):
-        clear_queue(interaction.guild.id)
-        vc = interaction.guild.voice_client
-        if vc:
-            await vc.disconnect()
-        await interaction.response.send_message("Stopped & cleared queue.")
-
-    @discord.ui.button(label="🔁 Autoplay", style=discord.ButtonStyle.success)
-    async def autoplay(self, interaction: discord.Interaction, button):
-        player.autoplay = not player.autoplay
-        await interaction.response.send_message(f"Autoplay: {player.autoplay}")
-
-
 @bot.event
 async def on_ready():
+    await wavelink.NodePool.create_node(
+        bot=bot,
+        host=LAVALINK_HOST,
+        port=LAVALINK_PORT,
+        password=LAVALINK_PASSWORD,
+        https=False
+    )
     await bot.tree.sync()
-    print("Bot ready")
+    print(f"Logged in as {bot.user}")
 
+async def search_track(query: str):
+    # Primary: YouTube
+    track = await wavelink.YouTubeTrack.search(query=query, return_first=True)
+    if track:
+        return track
 
-@bot.event
-async def on_voice_state_update(member, before, after):
-    await player.auto_reconnect(member, before, after)
+    # Fallback 1: YouTube Music
+    track = await wavelink.YouTubeMusicTrack.search(query=query, return_first=True)
+    if track:
+        return track
 
+    # Fallback 2: SoundCloud
+    track = await wavelink.SoundCloudTrack.search(query=query, return_first=True)
+    return track
 
-@bot.tree.command(name="play", description="Play a YouTube song")
+@bot.tree.command(name="play", description="Play a song")
 async def play(interaction: discord.Interaction, query: str):
     await interaction.response.defer()
 
     if not interaction.user.voice:
-        return await interaction.followup.send("Join a voice channel.")
+        return await interaction.followup.send("Join a voice channel first.")
 
-    vc = interaction.guild.voice_client
-    if not vc:
-        vc = await interaction.user.voice.channel.connect()
+    if not interaction.guild.voice_client:
+        player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
+    else:
+        player = interaction.guild.voice_client
 
-    ytdl = yt_dlp.YoutubeDL({"quiet": True})
-    info = ytdl.extract_info(f"ytsearch:{query}", download=False)["entries"][0]
-    url = info["webpage_url"]
+    track = await search_track(query)
+    if not track:
+        return await interaction.followup.send("No results found.")
 
-    add_song(interaction.guild.id, url)
-
-    if not vc.is_playing():
-        await player.play_next(interaction.guild, interaction.channel)
+    await player.play(track)
 
     embed = discord.Embed(
-        title="Added to Queue",
-        description=info["title"],
-        color=discord.Color.green()
+        title="🎵 Now Playing",
+        description=track.title,
+        color=discord.Color.blurple()
     )
 
-    await interaction.followup.send(embed=embed, view=ControlView(interaction.guild))
+    await interaction.followup.send(embed=embed)
 
+@bot.tree.command(name="skip", description="Skip current song")
+async def skip(interaction: discord.Interaction):
+    player = interaction.guild.voice_client
+    if player and player.is_playing():
+        await player.stop()
+        await interaction.response.send_message("⏭ Skipped")
+    else:
+        await interaction.response.send_message("Nothing playing.")
+
+@bot.tree.command(name="disconnect", description="Disconnect bot")
+async def disconnect(interaction: discord.Interaction):
+    player = interaction.guild.voice_client
+    if player:
+        await player.disconnect()
+        await interaction.response.send_message("Disconnected.")
+    else:
+        await interaction.response.send_message("Not connected.")
 
 bot.run(TOKEN)

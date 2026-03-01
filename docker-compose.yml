@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:latest
+    container_name: lavalink
+    restart: always
+    environment:
+      - SERVER_PORT=2333
+      - LAVALINK_SERVER_PASSWORD=youshallnotpass
+    ports:
+      - "2333:2333"
+
+  bot:
+    build: .
+    container_name: discord-bot
+    restart: always
+    environment:
+      - DISCORD_TOKEN=YOUR_TOKEN_HERE
+      - LAVALINK_HOST=lavalink
+      - LAVALINK_PORT=2333
+      - LAVALINK_PASSWORD=youshallnotpass
+    depends_on:
+      - lavalink
