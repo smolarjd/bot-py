@@ -3,4 +3,4 @@ wavelink==2.6.3
 yt-dlp
 PyNaCl
 python-dotenv
-NIXPACKS_PKGS=ffmpeg
+
